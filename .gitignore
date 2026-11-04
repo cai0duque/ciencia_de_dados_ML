@@ -1,0 +1,22 @@
+# Ambiente virtual Python
+.venv/
+venv/
+ENV/
+
+# Bytecode e caches Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Checkpoints do Jupyter Notebook
+.ipynb_checkpoints/
+
+# Arquivos temporários do sistema operacional e IDEs
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Pacotes ZIP brutos completos do Brasil (>90 MB cada, mantidos fora do repo ou ignorados se copiados)
+*.zip
+
