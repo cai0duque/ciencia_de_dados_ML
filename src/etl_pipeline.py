@@ -21,6 +21,74 @@ RAW_LONDRINA_COMP_DIR = BASE_DIR / "data" / "raw" / "inmet_londrina_complementar
 PROCESSED_DIR = BASE_DIR / "data" / "processed"
 ATIVIDADE2_DIR = BASE_DIR / "Atividade 2"
 
+DIAS_SEMANA_PT = {
+    0: "segunda-feira",
+    1: "terça-feira",
+    2: "quarta-feira",
+    3: "quinta-feira",
+    4: "sexta-feira",
+    5: "sábado",
+    6: "domingo",
+}
+
+METEO_COLS_FOR_JOIN = [
+    "data",
+    "temp_media_c",
+    "temp_min_c",
+    "temp_max_c",
+    "amplitude_termica_c",
+    "precip_londrina_mm",
+    "fonte_precip_londrina",
+    "inmet_83766_precip_mm",
+    "era5_londrina_precip_mm",
+    "a835_precip_mm",
+    "a835_temp_media_c",
+    "dia_chuvoso_londrina",
+    "dia_chuvoso_a835",
+    "faixa_precipitacao",
+    "faixa_temperatura_media",
+    "faixa_temperatura_maxima",
+]
+
+
+def _clean_decimal_columns(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    """Converte colunas numéricas formatadas com vírgula decimal para float."""
+    for col in cols:
+        df[col] = pd.to_numeric(
+            df[col].astype(str).str.strip().str.replace(",", ".", regex=False),
+            errors="coerce",
+        )
+    return df
+
+
+def map_modal_categoria(tipo_veiculo: object, tipo_envolvido: object) -> str:
+    """Agrupa `tipo_veiculo` e `tipo_envolvido` em modais analíticos padronizados."""
+    env = str(tipo_envolvido).strip()
+    if env == "Pedestre":
+        return "Pedestre"
+    veic = str(tipo_veiculo).strip()
+    if veic in ["Motocicleta", "Motoneta", "Ciclomotor", "Triciclo"]:
+        return "Moto"
+    if veic in ["Automóvel", "Caminhonete", "Camioneta", "Utilitário"]:
+        return "Carro"
+    if veic in ["Caminhão", "Caminhão-trator", "Reboque", "Semi-reboque", "Semireboque"]:
+        return "Caminhão"
+    if veic == "Bicicleta":
+        return "Bicicleta"
+    if veic in ["Ônibus", "Micro-ônibus"]:
+        return "Ônibus"
+    return "Outros"
+
+
+def clean_sexo_label(sexo: object) -> str:
+    """Padroniza a variável categórica de sexo dos envolvidos na PRF."""
+    txt = str(sexo).strip()
+    if "Masc" in txt:
+        return "Masculino"
+    if "Fem" in txt:
+        return "Feminino"
+    return "Não Informado / Ignorado"
+
 
 def load_prf_londrina(years=(2022, 2023, 2024, 2025)) -> pd.DataFrame:
     """
@@ -43,14 +111,7 @@ def load_prf_londrina(years=(2022, 2023, 2024, 2025)) -> pd.DataFrame:
     prf["data"] = pd.to_datetime(prf["data_inversa"].astype(str).str.strip(), format="%Y-%m-%d")
 
     # Conversão de coordenadas e km (vírgula decimal -> ponto decimal)
-    for col in ["km", "latitude", "longitude"]:
-        prf[col] = (
-            prf[col]
-            .astype(str)
-            .str.strip()
-            .str.replace(",", ".", regex=False)
-        )
-        prf[col] = pd.to_numeric(prf[col], errors="coerce")
+    prf = _clean_decimal_columns(prf, ["km", "latitude", "longitude"])
 
     # Colunas inteiras de contagem
     int_cols = [
@@ -135,25 +196,25 @@ def aggregate_prf_daily(prf: pd.DataFrame, start_date="2022-01-01", end_date="20
     return daily
 
 
-def load_inmet_automatic_station(station_code="A835", years=(2022, 2023, 2024, 2025)) -> pd.DataFrame:
+def _read_raw_inmet_hourly(station_code="A835", years=(2022, 2023, 2024, 2025)) -> pd.DataFrame:
     """
-    Lê os arquivos horários brutos de estação automática do INMET (ex: A835 ou A842),
-    converte de UTC para horário local (America/Sao_Paulo, GMT-3) e agrega por dia civil.
+    Lê e limpa os registros horários brutos de estação automática do INMET (ex: A835),
+    retornando as colunas meteorológicas tratadas e o timestamp local (America/Sao_Paulo).
     """
     frames = []
     for yr in years:
         matches = list(RAW_INMET_DIR.glob(f"*{station_code}*{yr}*.CSV"))
         if not matches:
             continue
-        fpath = matches[0]
         df = pd.read_csv(
-            fpath,
+            matches[0],
             sep=";",
             encoding="latin-1",
             skiprows=8,
             decimal=",",
             na_values=["-9999", "-9999.0", "-9999,0", ""],
         )
+        df["ano_arquivo"] = yr
         frames.append(df)
 
     raw = pd.concat(frames, ignore_index=True)
@@ -186,13 +247,11 @@ def load_inmet_automatic_station(station_code="A835", years=(2022, 2023, 2024, 2
         "vento_vel_ms",
     ]:
         raw[c] = pd.to_numeric(raw[c], errors="coerce")
-        # Tratar valores sentinela negativos de precipitação/umidade
         if c in ("precip_horaria_mm", "umid_rel_pct", "vento_vel_ms", "vento_rajada_ms"):
             raw.loc[raw[c] < 0, c] = np.nan
         if c in ("temp_ar_c", "temp_max_ant_c", "temp_min_ant_c"):
             raw.loc[raw[c] < -50, c] = np.nan
 
-    # Padronizar data e hora UTC -> converter para fuso local de Londrina (GMT-3)
     hora_clean = (
         raw["hora_utc_str"]
         .astype(str)
@@ -208,10 +267,56 @@ def load_inmet_automatic_station(station_code="A835", years=(2022, 2023, 2024, 2
         + ":"
         + hora_clean.str[2:],
         format="%Y-%m-%d %H:%M",
-         utc=True,
+        utc=True,
     )
     dt_local = dt_utc.dt.tz_convert("America/Sao_Paulo")
     raw["data"] = pd.to_datetime(dt_local.dt.date)
+    raw["ano"] = dt_local.dt.year
+    raw["hora_local"] = dt_local.dt.hour
+    return raw
+
+
+def compute_inmet_hourly_rain_stats(
+    station_code="A835",
+    years=(2022, 2023, 2024),
+) -> tuple[dict, pd.DataFrame]:
+    """
+    Calcula a fração real de horas com precipitação (> 0 mm) na série horária do INMET,
+    explicando por que médias de dias inteiros (24h) subestimam o risco da hora chuvosa.
+    """
+    raw = _read_raw_inmet_hourly(station_code=station_code, years=years)
+    valid = raw[raw["precip_horaria_mm"].notna()].copy()
+    valid["teve_chuva"] = (valid["precip_horaria_mm"] > 0).astype(int)
+
+    n_valid = int(len(valid))
+    n_rain = int(valid["teve_chuva"].sum())
+    by_hour = (
+        valid.groupby("hora_local")
+        .agg(
+            horas_validas=("precip_horaria_mm", "count"),
+            horas_com_chuva=("teve_chuva", "sum"),
+            precip_media_mm=("precip_horaria_mm", "mean"),
+        )
+        .reset_index()
+    )
+    by_hour["pct_horas_chuva"] = (by_hour["horas_com_chuva"] / by_hour["horas_validas"] * 100.0).round(2)
+
+    summary = {
+        "estacao": station_code,
+        "periodo": f"{min(years)}-{max(years)}",
+        "horas_validas": n_valid,
+        "horas_com_chuva": n_rain,
+        "fracao_horas_chuva_pct": round(n_rain / n_valid * 100.0, 2) if n_valid else 0.0,
+    }
+    return summary, by_hour
+
+
+def load_inmet_automatic_station(station_code="A835", years=(2022, 2023, 2024, 2025)) -> pd.DataFrame:
+    """
+    Agrega os registros horários da estação automática do INMET (convertidos para GMT-3)
+    para o nível diário civil em Londrina.
+    """
+    raw = _read_raw_inmet_hourly(station_code=station_code, years=years)
 
     prefix = station_code.lower()
     daily = (
@@ -338,16 +443,7 @@ def build_consolidated_dataset() -> tuple[pd.DataFrame, pd.DataFrame]:
     daily["ano"] = daily["data"].dt.year
     daily["mes"] = daily["data"].dt.month
     daily["dia_semana_num"] = daily["data"].dt.day_of_week  # 0=Seg, 6=Dom
-    dias_pt = {
-        0: "segunda-feira",
-        1: "terça-feira",
-        2: "quarta-feira",
-        3: "quinta-feira",
-        4: "sexta-feira",
-        5: "sábado",
-        6: "domingo",
-    }
-    daily["dia_semana"] = daily["dia_semana_num"].map(dias_pt)
+    daily["dia_semana"] = daily["dia_semana_num"].map(DIAS_SEMANA_PT)
     daily["fim_de_semana"] = daily["dia_semana_num"].isin([5, 6]).astype(int)
 
     # Indicadores do Project Canvas (Lab 01):
@@ -399,27 +495,54 @@ def build_consolidated_dataset() -> tuple[pd.DataFrame, pd.DataFrame]:
     )
 
     # Enriquecer ocorrências individuais com os dados meteorológicos do dia correspondente
-    meteo_cols_for_join = [
-        "data",
-        "temp_media_c",
-        "temp_min_c",
-        "temp_max_c",
-        "amplitude_termica_c",
-        "precip_londrina_mm",
-        "fonte_precip_londrina",
-        "inmet_83766_precip_mm",
-        "era5_londrina_precip_mm",
-        "a835_precip_mm",
-        "a835_temp_media_c",
-        "dia_chuvoso_londrina",
-        "dia_chuvoso_a835",
-        "faixa_precipitacao",
-        "faixa_temperatura_media",
-        "faixa_temperatura_maxima",
-    ]
-    prf_enriched = prf_londrina.merge(daily[meteo_cols_for_join], on="data", how="left")
+    prf_enriched = prf_londrina.merge(daily[METEO_COLS_FOR_JOIN], on="data", how="left")
 
     return prf_enriched, daily
+
+
+def load_prf_pessoas_londrina(
+    daily_df: pd.DataFrame,
+    years=(2022, 2023, 2024, 2025),
+) -> pd.DataFrame:
+    """
+    Carrega os microdados por pessoa/veículo da PRF (acidentesYYYY_pessoa_londrina.csv),
+    padroniza modais, gênero, horários e cruza com a série meteorológica diária.
+    """
+    frames = []
+    for yr in years:
+        fpath = RAW_PRF_DIR / f"acidentes{yr}_pessoa_londrina.csv"
+        df = pd.read_csv(fpath, sep=";", encoding="latin-1", low_memory=False)
+        mask = df["municipio"].astype(str).str.strip().str.upper() == "LONDRINA"
+        df_lond = df.loc[mask].copy()
+        df_lond["ano_arquivo"] = yr
+        frames.append(df_lond)
+
+    pes = pd.concat(frames, ignore_index=True)
+    pes["data"] = pd.to_datetime(pes["data_inversa"].astype(str).str.strip(), format="%Y-%m-%d")
+    pes = _clean_decimal_columns(pes, ["km", "latitude", "longitude"])
+
+    for col in ["ilesos", "feridos_leves", "feridos_graves", "mortos"]:
+        pes[col] = pd.to_numeric(pes[col], errors="coerce").fillna(0).astype(int)
+    pes["idade_num"] = pd.to_numeric(pes["idade"], errors="coerce")
+    pes["hora"] = pd.to_numeric(pes["horario"].astype(str).str.slice(0, 2), errors="coerce").fillna(0).astype(int)
+
+    for col in ["condicao_metereologica", "tipo_veiculo", "tipo_envolvido", "estado_fisico", "sexo", "tipo_acidente", "causa_acidente", "fase_dia"]:
+        pes[col] = pes[col].astype(str).str.strip()
+
+    pes["dia_semana"] = pes["data"].dt.day_of_week.map(DIAS_SEMANA_PT)
+    pes["fim_de_semana"] = pes["data"].dt.day_of_week.isin([5, 6]).astype(int)
+    pes["tipo_envolvido_clean"] = pes["tipo_envolvido"]
+    pes["modal"] = [map_modal_categoria(v, e) for v, e in zip(pes["tipo_veiculo"], pes["tipo_envolvido"])]
+    pes["genero"] = pes["sexo"].map(clean_sexo_label)
+
+    pes["condicao_chuva_prf"] = pes["condicao_metereologica"].isin(["Chuva", "Garoa/Chuvisco"]).astype(int)
+    pes["tem_vitima"] = ((pes["feridos_leves"] > 0) | (pes["feridos_graves"] > 0) | (pes["mortos"] > 0)).astype(int)
+    pes["tem_grave_ou_morte"] = ((pes["feridos_graves"] > 0) | (pes["mortos"] > 0)).astype(int)
+    pes["tem_obito"] = (pes["mortos"] > 0).astype(int)
+
+    pes = pes.merge(daily_df[METEO_COLS_FOR_JOIN + ["cenario_chuva_londrina"]], on="data", how="left")
+    pes = pes.sort_values(["data", "horario", "id", "pesid"]).reset_index(drop=True)
+    return pes
 
 
 def save_outputs():
@@ -427,15 +550,23 @@ def save_outputs():
     ATIVIDADE2_DIR.mkdir(parents=True, exist_ok=True)
 
     prf_enriched, daily = build_consolidated_dataset()
+    pes_enriched = load_prf_pessoas_londrina(daily_df=daily, years=(2022, 2023, 2024, 2025))
+    _, hourly_a835 = compute_inmet_hourly_rain_stats(station_code="A835", years=(2022, 2023, 2024))
 
     # 1. Salvar em data/processed/
     prf_enriched.to_csv(PROCESSED_DIR / "prf_sinistros_londrina_2022_2025_enriquecido.csv", index=False, encoding="utf-8")
     prf_22_24 = prf_enriched[prf_enriched["ano_arquivo"].isin([2022, 2023, 2024])].copy()
     prf_22_24.to_csv(PROCESSED_DIR / "prf_sinistros_londrina_2022_2024_enriquecido.csv", index=False, encoding="utf-8")
 
+    pes_enriched.to_csv(PROCESSED_DIR / "prf_pessoas_veiculos_londrina_2022_2025_enriquecido.csv", index=False, encoding="utf-8")
+    pes_22_24 = pes_enriched[pes_enriched["ano_arquivo"].isin([2022, 2023, 2024])].copy()
+    pes_22_24.to_csv(PROCESSED_DIR / "prf_pessoas_veiculos_londrina_2022_2024_enriquecido.csv", index=False, encoding="utf-8")
+
     daily.to_csv(PROCESSED_DIR / "base_consolidada_londrina_diaria_2022_2025.csv", index=False, encoding="utf-8")
     daily_22_24 = daily[daily["ano"].isin([2022, 2023, 2024])].copy()
     daily_22_24.to_csv(PROCESSED_DIR / "base_consolidada_londrina_diaria_2022_2024.csv", index=False, encoding="utf-8")
+
+    hourly_a835.to_csv(PROCESSED_DIR / "inmet_a835_resumo_horario_2022_2024.csv", index=False, encoding="utf-8")
 
     # 2. Salvar exemplares na pasta Atividade 2/ para entrega imediata ao professor
     # 2a. Base consolidada diária (recorte 2022-2024 do Project Canvas e recorte completo 2022-2025)
@@ -504,10 +635,17 @@ def save_outputs():
     )
 
     print("Arquivos gerados com sucesso!")
-    print(f"  - Ocorrências PRF Londrina (2022-2024): {len(prf_22_24)} linhas")
-    print(f"  - Ocorrências PRF Londrina (2022-2025): {len(prf_enriched)} linhas")
-    print(f"  - Base Diária Consolidada (2022-2024):  {len(daily_22_24)} dias")
-    print(f"  - Base Diária Consolidada (2022-2025):  {len(daily)} dias")
+    print(f"  - Ocorrências PRF Londrina (2022-2024):         {len(prf_22_24)} linhas")
+    print(f"  - Ocorrências PRF Londrina (2022-2025):         {len(prf_enriched)} linhas")
+    print(f"  - Pessoas/Veículos PRF Londrina (2022-2024):    {len(pes_22_24)} registros")
+    print(f"  - Pessoas/Veículos PRF Londrina (2022-2025):    {len(pes_enriched)} registros")
+    print(f"  - Base Diária Consolidada (2022-2024):          {len(daily_22_24)} dias")
+    print(f"  - Base Diária Consolidada (2022-2025):          {len(daily)} dias")
+    print(
+        f"  - Série Horária INMET A835 (2022-2024):         "
+        f"{int(hourly_a835['horas_com_chuva'].sum())}/{int(hourly_a835['horas_validas'].sum())} h com chuva "
+        f"({hourly_a835['horas_com_chuva'].sum()/hourly_a835['horas_validas'].sum()*100:.2f}%)"
+    )
 
 
 if __name__ == "__main__":

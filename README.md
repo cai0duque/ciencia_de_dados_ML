@@ -30,14 +30,15 @@ ciencia_de_dados_ML/
 │   └── figuras/                                              # Gráficos analíticos de alta resolução das Perguntas 1 a 4
 ├── data/
 │   ├── raw/
-│   │   ├── prf/                                              # Microdados anuais brutos da PRF (datatran2022..2025.csv)
+│   │   ├── prf/                                              # Microdados PRF (datatran2022..2025.csv e acidentes*_pessoa_londrina.csv)
 │   │   ├── inmet/                                            # Estações Automáticas brutas extraídas dos ZIPs (A835, A842)
 │   │   └── inmet_londrina_complementar/                      # Estação INMET Convencional Londrina (83766), SBLO (83768) e ERA5
-│   └── processed/                                            # Bases limpas, enriquecidas e consolidadas prontas para análise
+│   └── processed/                                            # Bases limpas e integradas (diária, ocorrências e pessoas/veículos)
 ├── notebooks/
-│   └── 01_eda_integracao_e_ml_londrina.ipynb                 # Notebook interativo completo (EDA, Testes Estatísticos e ML)
+│   └── 01_eda_integracao_e_ml_londrina.ipynb                 # Notebook interativo completo e executado (EDA, Modais, Gênero e ML)
 ├── reports/
-│   └── figures/                                              # Painéis visuais gerados pelos scripts analíticos
+│   ├── relatorio_analitico_final.md                          # Relatório Analítico Final consolidado (2022-2025)
+│   └── figures/                                              # Painéis visuais (fig01..fig05) gerados pelos scripts analíticos
 ├── src/
 │   ├── download_dados_brutos.py                              # Script reprodutível de download e extração das fontes oficiais
 │   ├── etl_pipeline.py                                       # Pipeline de limpeza, padronização e integração (PRF + INMET)

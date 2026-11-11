@@ -41,6 +41,16 @@ PROCESSED_DIR = BASE_DIR / "data" / "processed"
 FIGURES_DIR = BASE_DIR / "reports" / "figures"
 ATIV2_FIG_DIR = BASE_DIR / "Atividade 2" / "figuras"
 
+ORDEM_DIAS_PT = [
+    "segunda-feira",
+    "terça-feira",
+    "quarta-feira",
+    "quinta-feira",
+    "sexta-feira",
+    "sábado",
+    "domingo",
+]
+
 
 def print_section(title: str):
     print("\n" + "=" * 80)
@@ -185,6 +195,163 @@ def analyze_project_questions(daily: pd.DataFrame, prf: pd.DataFrame, label_peri
     )
     grp_fds.index = ["Dia Útil (Seg-Sex)", "Fim de Semana (Sáb-Dom)"]
     print(grp_fds.to_string())
+
+
+def analyze_transport_and_hourly_patterns(
+    daily: pd.DataFrame,
+    prf: pd.DataFrame,
+    pes: pd.DataFrame,
+    hourly_a835: pd.DataFrame,
+    label_periodo: str,
+):
+    """
+    Analisa proporções Seco vs. Chuvoso, variação por tipo de transporte (Carro, Moto,
+    Caminhão, Pedestre, Ônibus, Bicicleta), fração horária de chuva e picos por dia/hora.
+    """
+    print_section(f"ANÁLISE MODAL, HORÁRIA E DE PROPORÇÕES ({label_periodo})")
+
+    n_seco = int((daily["dia_chuvoso_londrina"] == 0).sum())
+    n_chuv = int((daily["dia_chuvoso_londrina"] == 1).sum())
+    n_tot_dias = len(daily)
+
+    print("--- 1. Proporção Direta: Acidentes vs. Quantidade de Dias no Clima ---")
+    for cl_val, cl_nome in [(0, "Dias Secos (< 1 mm)"), (1, "Dias Chuvosos (>= 1 mm)")]:
+        sub_d = daily[daily["dia_chuvoso_londrina"] == cl_val]
+        n_d = len(sub_d)
+        n_acid = int(sub_d["total_acidentes"].sum())
+        d_com_acid = int((sub_d["total_acidentes"] > 0).sum())
+        print(
+            f"  • {cl_nome:24s}: {n_d:4d} dias ({n_d/n_tot_dias*100:5.1f}% dos dias) | "
+            f"{n_acid:3d} acidentes ({n_acid/daily['total_acidentes'].sum()*100:5.1f}% do total) | "
+            f"Razão={n_acid/n_d:.3f}/dia ({n_acid/n_d*100:5.1f} por 100d) | "
+            f"Dias c/ >=1 sinistro: {d_com_acid}/{n_d} ({d_com_acid/n_d*100:.1f}%)"
+        )
+
+    h_tot = int(hourly_a835["horas_validas"].sum())
+    h_chuv = int(hourly_a835["horas_com_chuva"].sum())
+    print(
+        f"\n  • Exposição horária real no INMET A835 (2022–2024): "
+        f"{h_chuv}/{h_tot} horas com precipitação > 0 mm ({h_chuv/h_tot*100:.2f}% do tempo)."
+    )
+
+    # Tabela por dia da semana x clima (proporção ajustada pela quantidade de dias)
+    print("\n--- 2. Proporção por Dia da Semana x Clima (Acidentes / Dias daquele Clima) ---")
+    dow_rows = []
+    for dia in ORDEM_DIAS_PT:
+        ds = daily[(daily["dia_semana"] == dia) & (daily["dia_chuvoso_londrina"] == 0)]
+        dc = daily[(daily["dia_semana"] == dia) & (daily["dia_chuvoso_londrina"] == 1)]
+        taxa_s = ds["total_acidentes"].mean() if len(ds) else 0.0
+        taxa_c = dc["total_acidentes"].mean() if len(dc) else 0.0
+        var_pct = (taxa_c / taxa_s - 1.0) * 100.0 if taxa_s > 0 else np.nan
+        dow_rows.append(
+            {
+                "Dia_Semana": dia,
+                "Dias_Secos": len(ds),
+                "Acid_Secos": int(ds["total_acidentes"].sum()),
+                "Taxa_Seco_100d": round(taxa_s * 100, 1),
+                "Dias_Chuv": len(dc),
+                "Acid_Chuv": int(dc["total_acidentes"].sum()),
+                "Taxa_Chuv_100d": round(taxa_c * 100, 1),
+                "Var_Chuva_%": round(var_pct, 1),
+            }
+        )
+    print(pd.DataFrame(dow_rows).to_string(index=False))
+
+    # Variação por Tipo de Transporte (deduplicando 1 veículo/modal por ocorrência)
+    acc_modal = pes[pes["modal"] != "Outros"].drop_duplicates(subset=["id", "modal"]).copy()
+    print("\n--- 3. Variação por Tipo de Transporte: Dia Seco (<1 mm) vs. Dia Chuvoso (>=1 mm) ---")
+    t_mod = acc_modal.groupby(["modal", "dia_chuvoso_londrina"])["id"].nunique().unstack(fill_value=0)
+    t_mod.columns = ["Acid_Seco", "Acid_Chuvoso"]
+    t_mod["Total"] = t_mod["Acid_Seco"] + t_mod["Acid_Chuvoso"]
+    t_mod["Taxa_100d_Seco"] = (t_mod["Acid_Seco"] / n_seco * 100).round(2)
+    t_mod["Taxa_100d_Chuv"] = (t_mod["Acid_Chuvoso"] / n_chuv * 100).round(2)
+    t_mod["Var_Taxa_Chuva_%"] = ((t_mod["Taxa_100d_Chuv"] / t_mod["Taxa_100d_Seco"] - 1) * 100).round(1)
+    print(t_mod.sort_values("Total", ascending=False).to_string())
+
+    print("\n--- 4. Picos por Transporte (Dia da Semana e Hora do Dia) ---")
+    for modal_name in ["Carro", "Moto", "Caminhão", "Pedestre", "Ônibus", "Bicicleta"]:
+        sm = acc_modal[acc_modal["modal"] == modal_name]
+        if sm.empty:
+            continue
+        d_all = sm.groupby("dia_semana")["id"].nunique()
+        h_all = sm.groupby("hora")["id"].nunique()
+        dh_all = sm.groupby(["dia_semana", "hora"])["id"].nunique()
+        best_dh = dh_all.idxmax()
+        print(
+            f"  • {modal_name:9s} (n={sm['id'].nunique():3d}): "
+            f"Dia pico={d_all.idxmax()} ({d_all.max()}) | "
+            f"Hora pico={h_all.idxmax():02d}h ({h_all.max()}) | "
+            f"Combinação={best_dh[0]} às {best_dh[1]:02d}h ({dh_all.max()})"
+        )
+
+    prf_h = prf.copy()
+    prf_h["hora"] = pd.to_numeric(prf_h["horario"].astype(str).str.slice(0, 2), errors="coerce").fillna(0).astype(int)
+    h_piv = acc_modal.pivot_table(index="hora", columns="modal", values="id", aggfunc="nunique", fill_value=0).reindex(range(24), fill_value=0)
+    h_piv["Total_Acid"] = prf_h.groupby("hora")["id"].nunique().reindex(range(24), fill_value=0)
+    h_piv["Dia_Seco"] = prf_h[prf_h["dia_chuvoso_londrina"] == 0].groupby("hora")["id"].nunique().reindex(range(24), fill_value=0)
+    h_piv["Dia_Chuvoso"] = prf_h[prf_h["dia_chuvoso_londrina"] == 1].groupby("hora")["id"].nunique().reindex(range(24), fill_value=0)
+    h_piv["Chuva_Momento_PRF"] = prf_h[prf_h["condicao_chuva_prf"] == 1].groupby("hora")["id"].nunique().reindex(range(24), fill_value=0)
+    print("\n--- 5. Comparativo Hora a Hora (00h às 23h) ---")
+    cols_h = ["Total_Acid", "Dia_Seco", "Dia_Chuvoso", "Chuva_Momento_PRF", "Carro", "Moto", "Caminhão", "Pedestre", "Ônibus", "Bicicleta"]
+    print(h_piv[[c for c in cols_h if c in h_piv.columns]].to_string())
+
+
+def analyze_gender_patterns(daily: pd.DataFrame, pes: pd.DataFrame, label_periodo: str):
+    """Analisa a distribuição dos envolvidos e condutores por gênero, modal, chuva e gravidade."""
+    print_section(f"ANÁLISE POR GÊNERO: CONDUTORES, PASSAGEIROS E PEDESTRES ({label_periodo})")
+
+    n_seco = int((daily["dia_chuvoso_londrina"] == 0).sum())
+    n_chuv = int((daily["dia_chuvoso_londrina"] == 1).sum())
+
+    t_env = pes.groupby(["genero", "tipo_envolvido_clean"])["pesid"].count().unstack(fill_value=0)
+    t_env["Total_Pessoas"] = t_env.sum(axis=1)
+    t_env["%_Total"] = (t_env["Total_Pessoas"] / len(pes) * 100).round(1)
+    print("1) Envolvidos por Gênero x Papel na Ocorrência:")
+    print(t_env.to_string())
+
+    cond_valid = pes[
+        (pes["tipo_envolvido_clean"] == "Condutor") & (pes["genero"].isin(["Masculino", "Feminino"]))
+    ].copy()
+    print("\n2) Condutores por Gênero x Clima (Taxa por 100 dias):")
+    t_clima = cond_valid.groupby(["genero", "dia_chuvoso_londrina"])["pesid"].count().unstack(fill_value=0)
+    t_clima.columns = ["Condutores_Seco", "Condutores_Chuvoso"]
+    t_clima["Total"] = t_clima["Condutores_Seco"] + t_clima["Condutores_Chuvoso"]
+    t_clima["Taxa_100d_Seco"] = (t_clima["Condutores_Seco"] / n_seco * 100).round(2)
+    t_clima["Taxa_100d_Chuv"] = (t_clima["Condutores_Chuvoso"] / n_chuv * 100).round(2)
+    t_clima["Var_Chuva_%"] = ((t_clima["Taxa_100d_Chuv"] / t_clima["Taxa_100d_Seco"] - 1) * 100).round(1)
+    print(t_clima.to_string())
+
+    print("\n3) Condutores por Gênero x Tipo de Veículo:")
+    t_mod = cond_valid.groupby(["modal", "genero"])["pesid"].count().unstack(fill_value=0)
+    t_mod["Total"] = t_mod.sum(axis=1)
+    t_mod["%_Feminino"] = (t_mod["Feminino"] / t_mod["Total"] * 100).round(1)
+    t_mod["%_Masculino"] = (t_mod["Masculino"] / t_mod["Total"] * 100).round(1)
+    print(t_mod.sort_values("Total", ascending=False).to_string())
+
+    print("\n4) Gravidade e Letalidade dos Condutores por Gênero:")
+    t_sev = cond_valid.groupby("genero").agg(
+        total_condutores=("pesid", "count"),
+        ilesos=("ilesos", "sum"),
+        feridos_leves=("feridos_leves", "sum"),
+        feridos_graves=("feridos_graves", "sum"),
+        mortos=("mortos", "sum"),
+    )
+    t_sev["%_Ilesos"] = (t_sev["ilesos"] / t_sev["total_condutores"] * 100).round(1)
+    t_sev["%_Graves_ou_Mortos"] = ((t_sev["feridos_graves"] + t_sev["mortos"]) / t_sev["total_condutores"] * 100).round(1)
+    t_sev["%_Letalidade"] = (t_sev["mortos"] / t_sev["total_condutores"] * 100).round(2)
+    print(t_sev.to_string())
+
+    by_id = cond_valid.groupby("id")["genero"].apply(set)
+    tot_ids = len(by_id)
+    only_m = sum(s == {"Masculino"} for s in by_id)
+    only_f = sum(s == {"Feminino"} for s in by_id)
+    mixed = sum(s == {"Masculino", "Feminino"} for s in by_id)
+    print(
+        f"\n5) Composição por Sinistro (n={tot_ids}): "
+        f"Apenas Homens={only_m} ({only_m/tot_ids*100:.1f}%) | "
+        f"Apenas Mulheres={only_f} ({only_f/tot_ids*100:.1f}%) | "
+        f"Misto (H+M)={mixed} ({mixed/tot_ids*100:.1f}%)"
+    )
 
 
 def generate_visualizations(daily_22_24: pd.DataFrame, prf_22_24: pd.DataFrame, daily_full: pd.DataFrame):
@@ -368,20 +535,11 @@ def generate_visualizations(daily_22_24: pd.DataFrame, prf_22_24: pd.DataFrame, 
     # Figura 2: Dinâmica Temporal, Dia da Semana e Distribuição Espacial (km da BR-369)
     fig2, axes2 = plt.subplots(1, 2, figsize=(15, 5.5))
 
-    ordem_dias = [
-        "segunda-feira",
-        "terça-feira",
-        "quarta-feira",
-        "quinta-feira",
-        "sexta-feira",
-        "sábado",
-        "domingo",
-    ]
     grp_dow = (
         daily_22_24.groupby(["dia_semana", "cenario_chuva_londrina"], observed=False)["total_acidentes"]
         .mean()
         .unstack()
-        .reindex(ordem_dias)
+        .reindex(ORDEM_DIAS_PT)
     )
     grp_dow.plot(
         kind="bar",
@@ -425,6 +583,160 @@ def generate_visualizations(daily_22_24: pd.DataFrame, prf_22_24: pd.DataFrame, 
     for d in [FIGURES_DIR, ATIV2_FIG_DIR]:
         fig2.savefig(d / "fig02_sazonalidade_semanal_e_km_br369.png", bbox_inches="tight")
     plt.close(fig2)
+
+
+def generate_extended_visualizations(daily_22_24: pd.DataFrame, pes_22_24: pd.DataFrame):
+    """Gera gráficos adicionais em `reports/figures/` para modais, horários e gênero."""
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    sns.set_theme(style="whitegrid", palette="deep")
+    plt.rcParams["figure.dpi"] = 150
+    plt.rcParams["font.size"] = 10
+
+    n_seco = int((daily_22_24["dia_chuvoso_londrina"] == 0).sum())
+    n_chuv = int((daily_22_24["dia_chuvoso_londrina"] == 1).sum())
+
+    # Figura 4: Variação por Modal, Proporção Semanal e Mapa Horário 00h-23h
+    acc_modal = pes_22_24[pes_22_24["modal"] != "Outros"].drop_duplicates(subset=["id", "modal"]).copy()
+    t_mod = acc_modal.groupby(["modal", "dia_chuvoso_londrina"])["id"].nunique().unstack(fill_value=0)
+    t_mod.columns = ["Seco", "Chuvoso"]
+    t_mod["Taxa_Seco_100d"] = t_mod["Seco"] / n_seco * 100.0
+    t_mod["Taxa_Chuv_100d"] = t_mod["Chuvoso"] / n_chuv * 100.0
+    t_mod["Var_%"] = (t_mod["Taxa_Chuv_100d"] / t_mod["Taxa_Seco_100d"] - 1.0) * 100.0
+    t_mod = t_mod.sort_values("Taxa_Seco_100d", ascending=False)
+
+    fig4 = plt.figure(figsize=(16, 10))
+    gs = fig4.add_gridspec(2, 2, height_ratios=[1, 1.05], hspace=0.38, wspace=0.25)
+
+    # Painel A: Taxa por 100 dias Seco vs Chuvoso por tipo de transporte
+    ax_a = fig4.add_subplot(gs[0, 0])
+    x = np.arange(len(t_mod))
+    w = 0.38
+    b1 = ax_a.bar(x - w / 2, t_mod["Taxa_Seco_100d"], w, label=f"Dia Seco (<1 mm, n={n_seco}d)", color="#4C72B0", edgecolor="black")
+    b2 = ax_a.bar(x + w / 2, t_mod["Taxa_Chuv_100d"], w, label=f"Dia Chuvoso (>=1 mm, n={n_chuv}d)", color="#C44E52", edgecolor="black")
+    for idx, (bar_s, bar_c, var_val) in enumerate(zip(b1, b2, t_mod["Var_%"])):
+        top_y = max(bar_s.get_height(), bar_c.get_height())
+        ax_a.text(idx, top_y + 1.2, f"{var_val:+.1f}%", ha="center", va="bottom", fontsize=8.5, fontweight="bold",
+                  color="#C44E52" if var_val > 0 else "#2E5A88")
+    ax_a.set_xticks(x)
+    ax_a.set_xticklabels(t_mod.index, rotation=12)
+    ax_a.set_ylabel("Sinistros por 100 Dias")
+    ax_a.set_ylim(0, max(t_mod["Taxa_Seco_100d"].max(), t_mod["Taxa_Chuv_100d"].max()) * 1.2)
+    ax_a.set_title(
+        f"A) Na chuva, motos caem {t_mod.loc['Moto', 'Var_%']:+.1f}% e caminhões sobem {t_mod.loc['Caminhão', 'Var_%']:+.1f}%\n"
+        "(Taxa ajustada por 100 dias em cada clima, 2022–2024)",
+        fontweight="bold",
+    )
+    ax_a.legend(loc="upper right")
+
+    # Painel B: Taxa semanal por clima (proporção ajustada por dias secos/chuvosos do dia da semana)
+    ax_b = fig4.add_subplot(gs[0, 1])
+    dow_rates = (
+        daily_22_24.groupby(["dia_semana", "cenario_chuva_londrina"])["total_acidentes"]
+        .mean()
+        .unstack()
+        .reindex(ORDEM_DIAS_PT)[["Seco (< 1 mm)", "Chuvoso (>= 1 mm)"]]
+        * 100.0
+    )
+    dow_rates.plot(kind="bar", ax=ax_b, color=["#4C72B0", "#C44E52"], edgecolor="black", width=0.75)
+    sab_chuv = dow_rates.loc["sábado", "Chuvoso (>= 1 mm)"]
+    sab_seco = dow_rates.loc["sábado", "Seco (< 1 mm)"]
+    ax_b.set_title(
+        f"B) Sábado chuvoso ({sab_chuv:.1f}/100d) supera sábado seco ({sab_seco:.1f}/100d)\n"
+        "(Sinistros por 100 dias do mesmo dia da semana, 2022–2024)",
+        fontweight="bold",
+    )
+    ax_b.set_xlabel("")
+    ax_b.set_ylabel("Sinistros por 100 Dias")
+    ax_b.set_ylim(0, dow_rates.values.max() * 1.24)
+    ax_b.set_xticklabels([d[:3].capitalize() for d in ORDEM_DIAS_PT], rotation=0)
+    ax_b.legend(title="Clima Diário", loc="upper left", ncol=2)
+
+    # Painel C: Perfil Horário 00h-23h dos principais modais
+    ax_c = fig4.add_subplot(gs[1, :])
+    h_mod = (
+        acc_modal[acc_modal["modal"].isin(["Carro", "Moto", "Caminhão", "Pedestre"])]
+        .pivot_table(index="hora", columns="modal", values="id", aggfunc="nunique", fill_value=0)
+        .reindex(range(24), fill_value=0)
+    )
+    sns.heatmap(
+        h_mod[["Carro", "Moto", "Caminhão", "Pedestre"]].T,
+        annot=True,
+        fmt="d",
+        cmap="YlOrRd",
+        linewidths=0.4,
+        cbar_kws={"label": "Total de Acidentes Envolvendo o Modal (2022–2024)"},
+        ax=ax_c,
+    )
+    ax_c.set_title("C) Picos horários na BR-369: Moto/Carro disparam às 07h e 17h–19h; Caminhões têm pico de manhã cedo (07h–10h)", fontweight="bold")
+    ax_c.set_xlabel("Hora do Dia (00h às 23h)")
+    ax_c.set_ylabel("Modal")
+    ax_c.set_xticklabels([f"{h:02d}h" for h in range(24)], rotation=0)
+
+    fig4.savefig(FIGURES_DIR / "fig04_modais_horarios_clima.png", bbox_inches="tight")
+    plt.close(fig4)
+
+    # Figura 5: Perfil por Gênero (Envolvidos, Condutores x Modal, e Queda na Chuva)
+    fig5, axes5 = plt.subplots(1, 2, figsize=(15, 5.5))
+
+    env_order = ["Condutor", "Passageiro", "Pedestre"]
+    env_gen = (
+        pes_22_24[(pes_22_24["tipo_envolvido_clean"].isin(env_order)) & (pes_22_24["genero"].isin(["Masculino", "Feminino"]))]
+        .groupby(["tipo_envolvido_clean", "genero"])["pesid"]
+        .count()
+        .unstack(fill_value=0)
+        .reindex(env_order)
+    )
+    env_pct = env_gen.div(env_gen.sum(axis=1), axis=0) * 100.0
+    env_pct[["Masculino", "Feminino"]].plot(
+        kind="bar", stacked=True, ax=axes5[0], color=["#4C72B0", "#DD8452"], edgecolor="black", width=0.6
+    )
+    for idx, role in enumerate(env_order):
+        m_v = env_pct.loc[role, "Masculino"]
+        f_v = env_pct.loc[role, "Feminino"]
+        axes5[0].text(idx, m_v / 2, f"{m_v:.1f}%\n({env_gen.loc[role, 'Masculino']})", ha="center", va="center", color="white", fontweight="bold", fontsize=9)
+        axes5[0].text(idx, m_v + f_v / 2, f"{f_v:.1f}%\n({env_gen.loc[role, 'Feminino']})", ha="center", va="center", color="black", fontweight="bold", fontsize=9)
+    axes5[0].set_title(
+        f"Homens lideram entre condutores ({env_pct.loc['Condutor', 'Masculino']:.1f}%),\n"
+        f"mas mulheres são maioria entre passageiros ({env_pct.loc['Passageiro', 'Feminino']:.1f}%)",
+        fontweight="bold",
+    )
+    axes5[0].set_xlabel("Papel na Ocorrência (PRF Londrina, 2022–2024)")
+    axes5[0].set_ylabel("Proporção (%)")
+    axes5[0].set_xticklabels(env_order, rotation=0)
+    axes5[0].set_ylim(0, 122)
+    axes5[0].legend(title="Gênero", loc="upper right", ncol=2)
+
+    cond = pes_22_24[(pes_22_24["tipo_envolvido_clean"] == "Condutor") & (pes_22_24["genero"].isin(["Masculino", "Feminino"]))].copy()
+    mod_order = ["Carro", "Moto", "Caminhão", "Ônibus", "Bicicleta"]
+    mod_gen = (
+        cond[cond["modal"].isin(mod_order)]
+        .groupby(["modal", "genero"])["pesid"]
+        .count()
+        .unstack(fill_value=0)
+        .reindex(mod_order)
+    )
+    mod_gen[["Masculino", "Feminino"]].plot(kind="bar", ax=axes5[1], color=["#4C72B0", "#DD8452"], edgecolor="black", width=0.7)
+    pct_f_map = {}
+    for idx, modal_name in enumerate(mod_order):
+        tot_m = mod_gen.loc[modal_name].sum()
+        pct_f = mod_gen.loc[modal_name, "Feminino"] / tot_m * 100.0 if tot_m > 0 else 0.0
+        pct_f_map[modal_name] = pct_f
+        if tot_m > 0:
+            axes5[1].text(idx, mod_gen.loc[modal_name].max() + 8, f"{pct_f:.1f}% F", ha="center", va="bottom", fontsize=8.5, fontweight="bold")
+    axes5[1].set_title(
+        f"Participação feminina ao volante é maior em carros ({pct_f_map['Carro']:.1f}%)\n"
+        f"do que em motos ({pct_f_map['Moto']:.1f}%) e caminhões ({pct_f_map['Caminhão']:.1f}%)",
+        fontweight="bold",
+    )
+    axes5[1].set_xlabel("Tipo de Veículo Conduzido (2022–2024)")
+    axes5[1].set_ylabel("Total de Condutores Envolvidos")
+    axes5[1].set_xticklabels(mod_order, rotation=0)
+    axes5[1].set_ylim(0, mod_gen.values.max() * 1.18)
+    axes5[1].legend(title="Gênero do Condutor", loc="upper right")
+
+    plt.tight_layout()
+    fig5.savefig(FIGURES_DIR / "fig05_perfil_genero_sinistros.png", bbox_inches="tight")
+    plt.close(fig5)
 
 
 def run_ml_experiments(daily_full: pd.DataFrame):
@@ -684,15 +996,24 @@ def run_ml_experiments(daily_full: pd.DataFrame):
 def main():
     daily_22_24 = pd.read_csv(PROCESSED_DIR / "base_consolidada_londrina_diaria_2022_2024.csv", parse_dates=["data"])
     prf_22_24 = pd.read_csv(PROCESSED_DIR / "prf_sinistros_londrina_2022_2024_enriquecido.csv", parse_dates=["data"])
+    pes_22_24 = pd.read_csv(PROCESSED_DIR / "prf_pessoas_veiculos_londrina_2022_2024_enriquecido.csv", parse_dates=["data"])
 
     daily_full = pd.read_csv(PROCESSED_DIR / "base_consolidada_londrina_diaria_2022_2025.csv", parse_dates=["data"])
     prf_full = pd.read_csv(PROCESSED_DIR / "prf_sinistros_londrina_2022_2025_enriquecido.csv", parse_dates=["data"])
+    pes_full = pd.read_csv(PROCESSED_DIR / "prf_pessoas_veiculos_londrina_2022_2025_enriquecido.csv", parse_dates=["data"])
+    hourly_a835 = pd.read_csv(PROCESSED_DIR / "inmet_a835_resumo_horario_2022_2024.csv")
 
     analyze_project_questions(daily_22_24, prf_22_24, "RECORTE OFICIAL LAB 01: 2022 A 2024")
     analyze_project_questions(daily_full, prf_full, "RECORTE ESTENDIDO: 2022 A 2025")
+    analyze_transport_and_hourly_patterns(daily_22_24, prf_22_24, pes_22_24, hourly_a835, "2022 A 2024")
+    analyze_transport_and_hourly_patterns(daily_full, prf_full, pes_full, hourly_a835, "2022 A 2025")
+    analyze_gender_patterns(daily_22_24, pes_22_24, "2022 A 2024")
+    analyze_gender_patterns(daily_full, pes_full, "2022 A 2025")
+
     generate_visualizations(daily_22_24, prf_22_24, daily_full)
+    generate_extended_visualizations(daily_22_24, pes_22_24)
     run_ml_experiments(daily_full)
-    print("\nVisualizações salvas em reports/figures/ e Atividade 2/figuras/!")
+    print("\nVisualizações salvas em reports/figures/ (fig01..fig05) e Atividade 2/figuras/ (fig01..fig03)!")
 
 
 if __name__ == "__main__":
