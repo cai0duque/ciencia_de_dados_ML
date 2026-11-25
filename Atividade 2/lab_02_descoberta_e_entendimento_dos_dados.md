@@ -156,7 +156,7 @@ No período de **01/01/2022 a 31/12/2024 ($1.096\text{ dias}$)**, foram registra
 
 * Dos **$41\text{ sinistros}$** (2022–2024) em que o agente da PRF preencheu `condicao_metereologica` como `"Chuva"` ($22$) ou `"Garoa/Chuvisco"` ($19$):
   * **$100{,}0\%$ ($41/41$)** ocorreram em dias com precipitação instrumental registrada ($> 0\text{ mm}$) em Londrina!
-  * **$95{,}1\%$ ($39/41$)** ocorreram em dias classificados como chuvosos pelo limiar de $\ge 1{,}0\text{ mm}$ em Londrina (os 2 casos restantes foram garoas leves entre $0{,}2\text{ mm}$ e $0{,}9\text{ mm}$).
+  * **$95{,}1\%$ ($39/41$)** ocorreram em dias classificados como chuvosos pelo limiar de $\ge 1{,}0\text{ mm}$ em Londrina (os 2 casos restantes tiveram registro de `"Chuva"` na PRF em dias com precipitação instrumental de $0{,}5\text{ mm}$ e $0{,}6\text{ mm}$ no INMET `83766`).
   * Quando comparados à Estação Automática `A835` (Maringá), a concordância cai para **$85{,}4\%$ ($> 0\text{ mm}$) e $82{,}9\%$ ($\ge 1{,}0\text{ mm}$)**, evidenciando a variabilidade espacial da chuva no Norte do Paraná.
 
 ---
@@ -166,6 +166,6 @@ No período de **01/01/2022 a 31/12/2024 ($1.096\text{ dias}$)**, foram registra
 As figuras abaixo foram geradas automaticamente pelo script `src/analise_exploratoria_e_ml.py` e salvas em `Atividade 2/figuras/`:
 
 1. **`figuras/fig01_painel_perguntas_project_canvas.png`**: Painel completo respondendo visualmente às 4 Perguntas Secundárias do Project Canvas com títulos-mensagem (Knaflic, *Storytelling with Data* — Slide 48).
-2. **`figuras/fig02_sazonalidade_semanal_e_km_br369.png`**: Comparação por dia da semana (evidenciando o pico às sextas-feiras e sábados) e distribuição espacial por quilômetro da BR-369 (evidenciando a concentração crítica no trecho urbano de Londrina entre o $\text{km }145$ e o $\text{km }160$).
+2. **`figuras/fig02_sazonalidade_semanal_e_km_br369.png`**: Comparação por dia da semana (evidenciando o pico às sextas-feiras secas e a alta nos sábados chuvosos) e distribuição espacial por quilômetro da BR-369 (evidenciando a concentração crítica no trecho urbano de Londrina entre o $\text{km }145$ e o $\text{km }159{,}3$).
 3. **`figuras/fig03_clusters_pca_clima_sinistros.png`**: Projeção em 2 componentes principais (PCA, $65{,}5\%$ da variância explicada) da clusterização K-Means ($k = 3$, *Silhouette Score* $= 0{,}4040$), identificando três regimes diários distintos em Londrina.
 

@@ -524,6 +524,7 @@ def load_prf_pessoas_londrina(
     for col in ["ilesos", "feridos_leves", "feridos_graves", "mortos"]:
         pes[col] = pd.to_numeric(pes[col], errors="coerce").fillna(0).astype(int)
     pes["idade_num"] = pd.to_numeric(pes["idade"], errors="coerce")
+    pes.loc[(pes["idade_num"] <= 0) | (pes["idade_num"] > 120), "idade_num"] = np.nan
     pes["hora"] = pd.to_numeric(pes["horario"].astype(str).str.slice(0, 2), errors="coerce").fillna(0).astype(int)
 
     for col in ["condicao_metereologica", "tipo_veiculo", "tipo_envolvido", "estado_fisico", "sexo", "tipo_acidente", "causa_acidente", "fase_dia"]:

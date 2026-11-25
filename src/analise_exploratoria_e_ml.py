@@ -263,9 +263,11 @@ def analyze_transport_and_hourly_patterns(
     t_mod = acc_modal.groupby(["modal", "dia_chuvoso_londrina"])["id"].nunique().unstack(fill_value=0)
     t_mod.columns = ["Acid_Seco", "Acid_Chuvoso"]
     t_mod["Total"] = t_mod["Acid_Seco"] + t_mod["Acid_Chuvoso"]
-    t_mod["Taxa_100d_Seco"] = (t_mod["Acid_Seco"] / n_seco * 100).round(2)
-    t_mod["Taxa_100d_Chuv"] = (t_mod["Acid_Chuvoso"] / n_chuv * 100).round(2)
-    t_mod["Var_Taxa_Chuva_%"] = ((t_mod["Taxa_100d_Chuv"] / t_mod["Taxa_100d_Seco"] - 1) * 100).round(1)
+    taxa_s = t_mod["Acid_Seco"] / n_seco * 100
+    taxa_c = t_mod["Acid_Chuvoso"] / n_chuv * 100
+    t_mod["Taxa_100d_Seco"] = taxa_s.round(2)
+    t_mod["Taxa_100d_Chuv"] = taxa_c.round(2)
+    t_mod["Var_Taxa_Chuva_%"] = ((taxa_c / taxa_s - 1) * 100).round(1)
     print(t_mod.sort_values("Total", ascending=False).to_string())
 
     print("\n--- 4. Picos por Transporte (Dia da Semana e Hora do Dia) ---")
@@ -316,9 +318,11 @@ def analyze_gender_patterns(daily: pd.DataFrame, pes: pd.DataFrame, label_period
     t_clima = cond_valid.groupby(["genero", "dia_chuvoso_londrina"])["pesid"].count().unstack(fill_value=0)
     t_clima.columns = ["Condutores_Seco", "Condutores_Chuvoso"]
     t_clima["Total"] = t_clima["Condutores_Seco"] + t_clima["Condutores_Chuvoso"]
-    t_clima["Taxa_100d_Seco"] = (t_clima["Condutores_Seco"] / n_seco * 100).round(2)
-    t_clima["Taxa_100d_Chuv"] = (t_clima["Condutores_Chuvoso"] / n_chuv * 100).round(2)
-    t_clima["Var_Chuva_%"] = ((t_clima["Taxa_100d_Chuv"] / t_clima["Taxa_100d_Seco"] - 1) * 100).round(1)
+    taxa_s_gen = t_clima["Condutores_Seco"] / n_seco * 100
+    taxa_c_gen = t_clima["Condutores_Chuvoso"] / n_chuv * 100
+    t_clima["Taxa_100d_Seco"] = taxa_s_gen.round(2)
+    t_clima["Taxa_100d_Chuv"] = taxa_c_gen.round(2)
+    t_clima["Var_Chuva_%"] = ((taxa_c_gen / taxa_s_gen - 1) * 100).round(1)
     print(t_clima.to_string())
 
     print("\n3) Condutores por Gênero x Tipo de Veículo:")
@@ -549,7 +553,8 @@ def generate_visualizations(daily_22_24: pd.DataFrame, prf_22_24: pd.DataFrame, 
         width=0.75,
     )
     axes2[0].set_title(
-        "Sexta-feira e Sábado lideram sinistros, amplificados em dias chuvosos\n(Média diária por dia da semana e condição climática, 2022–2024)",
+        "Sexta seca lidera (0,69/dia); sábado sobe na chuva (0,55 vs 0,47)\n(Média diária por dia da semana e clima, 2022–2024)",
+        fontsize=11,
         fontweight="bold",
     )
     axes2[0].set_xlabel("Dia da Semana")
@@ -572,14 +577,15 @@ def generate_visualizations(daily_22_24: pd.DataFrame, prf_22_24: pd.DataFrame, 
         alpha=0.9,
     )
     axes2[1].set_title(
-        "Concentração crítica de sinistros no trecho urbano da BR-369 (km 145 a 162)\n(Distribuição espacial por quilômetro em Londrina, 2022–2024)",
+        "Trecho urbano da BR-369 concentra 89,1% dos casos (km 145–159,3)\n(Distribuição espacial por quilômetro em Londrina, 2022–2024)",
+        fontsize=11,
         fontweight="bold",
     )
     axes2[1].set_xlabel("Quilômetro (km) da Rodovia BR-369 em Londrina")
     axes2[1].set_ylabel("Total de Sinistros (2022–2024)")
     axes2[1].legend(title="Gravidade")
 
-    plt.tight_layout()
+    plt.tight_layout(w_pad=2.5)
     for d in [FIGURES_DIR, ATIV2_FIG_DIR]:
         fig2.savefig(d / "fig02_sazonalidade_semanal_e_km_br369.png", bbox_inches="tight")
     plt.close(fig2)
@@ -667,7 +673,7 @@ def generate_extended_visualizations(daily_22_24: pd.DataFrame, pes_22_24: pd.Da
         cbar_kws={"label": "Total de Acidentes Envolvendo o Modal (2022–2024)"},
         ax=ax_c,
     )
-    ax_c.set_title("C) Picos horários na BR-369: Moto/Carro disparam às 07h e 17h–19h; Caminhões têm pico de manhã cedo (07h–10h)", fontweight="bold")
+    ax_c.set_title("C) Picos horários na BR-369: Moto/Carro disparam às 07h–08h e 17h–18h; Caminhões têm pico às 08h", fontweight="bold")
     ax_c.set_xlabel("Hora do Dia (00h às 23h)")
     ax_c.set_ylabel("Modal")
     ax_c.set_xticklabels([f"{h:02d}h" for h in range(24)], rotation=0)
